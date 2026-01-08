@@ -1,3 +1,8 @@
+import "react-native-get-random-values";
+
+import { Amplify } from "aws-amplify";
+import { amplifyConfig } from "../src/amplifyConfig";
+
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -5,6 +10,7 @@ import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
+Amplify.configure(amplifyConfig);
 export const unstable_settings = {
   anchor: '(tabs)',
 };
