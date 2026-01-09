@@ -1,3 +1,4 @@
+import { getCurrentUser, signOut } from "aws-amplify/auth";
 import * as Location from "expo-location";
 import { router } from "expo-router"; //for sign-in button 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -5,10 +6,11 @@ import { Alert, Button, ScrollView, StyleSheet, Text, View } from "react-native"
 
 
 
+
 // 1) Hardcoded workplace for now (replace later with AWS config)
 const WORKPLACE = {
   name: "Test Workplace",
-  center: { lat: 55.774413, lng: 12.507546}, // dtu center example
+  center: { lat: 55.786781, lng: 12.523153}, // dtu center example
   radiusMeters: 150,
   capMinutes: 1, // 12 hours safety cap
 };
@@ -321,6 +323,23 @@ export default function HomeScreen() {
   setCurrentCoords(null);
   setAccuracy(null);
 }
+async function whoAmI() {
+  try {
+    const u = await getCurrentUser();
+    console.log("CURRENT USER:", u);
+    Alert.alert("Current user", u.username);
+  } catch {
+    Alert.alert("Current user", "Not signed in");
+  }
+}
+
+async function logout() {
+  await signOut();
+  Alert.alert("Signed out", "You are now signed out");
+  router.replace("/sign-in");
+}
+
+
 
 
   return (
@@ -380,6 +399,9 @@ export default function HomeScreen() {
         <View style={styles.row}>
           <Button title="Reset" onPress={reset} />
           <Button title="Go to Sign In" onPress={() => router.push("/sign-in")} />
+          <Button title="Who am I?" onPress={whoAmI} />
+          <Button title="Logout" onPress={logout} />
+
         </View>
 
         <Text style={styles.small}>
