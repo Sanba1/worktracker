@@ -1,3 +1,4 @@
+import { getWorkplaces } from "@/src/api";
 import { getCurrentUser, signOut } from "aws-amplify/auth";
 import * as Location from "expo-location";
 import { router } from "expo-router"; //for sign-in button 
@@ -72,6 +73,8 @@ function formatMs(ms: number) {
 }
 
 export default function HomeScreen() {
+  const [workplace, setWorkplace] = useState(WORKPLACE);
+
   const [permissionStatus, setPermissionStatus] = useState<Location.PermissionStatus | "unknown">(
     "unknown"
   );
@@ -91,14 +94,14 @@ export default function HomeScreen() {
   // Timer tick for UI and cap enforcement (runs only while RUNNING)
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
-  const capMs = useMemo(() => WORKPLACE.capMinutes * 60 * 1000, []);
+  const capMs = useMemo(() => workplace.capMinutes * 60 * 1000, [workplace.capMinutes]);
 
   const distanceInfo = useMemo(() => {
     if (!currentCoords) return null;
-    const d = haversineMeters(currentCoords, WORKPLACE.center);
+    const d = haversineMeters(currentCoords, workplace.center);
     return {
       meters: d,
-      inside: d <= WORKPLACE.radiusMeters,
+      inside: d <= workplace.radiusMeters,
     };
   }, [currentCoords]);
 
@@ -113,6 +116,10 @@ export default function HomeScreen() {
   );
   const [events, setEvents] = useState<WorkEvent[]>([]);
   const activeSessionIdRef = useRef(sessionId);
+
+  const [awsNames, setAwsNames] = useState<string>("");
+  
+
 
 
   function stopTick() {
@@ -339,6 +346,24 @@ async function logout() {
   router.replace("/sign-in");
 }
 
+async function loadWorkplacesFromAws() {
+  try {
+    const items = await getWorkplaces();
+    setAwsNames(items.map((w) => w.name).join(", "));
+
+    if (items.length > 0) {
+      setWorkplace(items[0]); // for now, just pick first workplace
+    }
+
+    Alert.alert("AWS OK", `Loaded ${items.length} workplace(s)`);
+  } catch (e: any) {
+    Alert.alert("AWS Load failed", e?.message ?? "Unknown error");
+  }
+}
+
+
+
+
 
 
 
@@ -398,11 +423,12 @@ async function logout() {
 
         <View style={styles.row}>
           <Button title="Reset" onPress={reset} />
-          <Button title="Go to Sign In" onPress={() => router.push("/sign-in")} />
           <Button title="Who am I?" onPress={whoAmI} />
+          <Button title="Load workplaces from AWS" onPress={loadWorkplacesFromAws} />
           <Button title="Logout" onPress={logout} />
-
         </View>
+
+        <Text style={styles.small}>AWS workplaces: {awsNames || "(none loaded)"}</Text>
 
         <Text style={styles.small}>
           Note: EXIT/ENTER are simulated because we don’t have a physical device setup yet. Later,

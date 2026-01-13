@@ -1,4 +1,4 @@
-import { confirmSignIn, getCurrentUser, signIn, signOut } from "aws-amplify/auth";
+import { confirmSignIn, getCurrentUser, signIn } from "aws-amplify/auth";
 import { router } from "expo-router";
 import React, { useState } from "react";
 import { Alert, Button, StyleSheet, Text, TextInput, View } from "react-native";
@@ -22,13 +22,13 @@ export default function SignInScreen() {
 
   setBusy(true);
   try {
-    // 🔴 PUT THIS BLOCK HERE (FIRST)
+    
     try {
       await getCurrentUser();
-      console.log("Already signed in, signing out first");
-      await signOut();
+      router.replace("/(tabs)");
+      return;
     } catch {
-      // Not signed in → continue normally
+  // not signed in -> continue
     }
 
     // 🔵 NOW do the real sign-in
