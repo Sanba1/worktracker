@@ -16,20 +16,42 @@ export type Workplace = {
 async function getBearerToken(): Promise<string> {
   const session = await fetchAuthSession();
   const token =
-    session.tokens?.idToken?.toString() || // usually best for API Gateway Cognito authorizer
-    session.tokens?.accessToken?.toString();
+    session.tokens?.idToken?.toString(); //|| // usually best for API Gateway Cognito authorizer
+    //session.tokens?.accessToken?.toString();
 
-  if (!token) throw new Error("No Cognito token found. Are you signed in?");
+  if (!token) {
+    throw new Error("Missing Cognito idToken. Are you signed in?");
+  }
   return token;
 }
 
-export async function getWorkplaces(): Promise<Workplace[]> {
+//export async function getWorkplaces(): Promise<Workplace[]> {
+  //const token = await getBearerToken();
+
+  //const res = await fetch(`${API_BASE}/workplaces`, {
+    //method: "GET",
+    //headers: {
+      //Authorization: `Bearer ${token}`,
+    //},
+  //});
+
+  //if (!res.ok) {
+    //const text = await res.text();
+    //throw new Error(`API error ${res.status}: ${text}`);
+  //}
+
+  //const json = await res.json();
+  //return json.items ?? [];
+//}
+
+export async function getMyWorkplaces(): Promise<Workplace[]> {
   const token = await getBearerToken();
 
-  const res = await fetch(`${API_BASE}/workplaces`, {
+  const res = await fetch(`${API_BASE}/me/workplaces`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${token}`,
+      Accept: "application/json",
     },
   });
 
@@ -41,3 +63,4 @@ export async function getWorkplaces(): Promise<Workplace[]> {
   const json = await res.json();
   return json.items ?? [];
 }
+

@@ -1,50 +1,44 @@
-import { getWorkplaces } from "@/src/api";
+import { getMyWorkplaces } from "@/src/api";
 import { getCurrentUser, signOut } from "aws-amplify/auth";
 import * as Location from "expo-location";
-import { router } from "expo-router"; //for sign-in button 
+import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, ScrollView, StyleSheet, Text, View } from "react-native";
 
-
-
-
-// 1) Hardcoded workplace for now (replace later with AWS config)
+// 1) Hardcoded workplace fallback (used until AWS loads)
 const WORKPLACE = {
   name: "Test Workplace",
-  center: { lat: 55.786781, lng: 12.523153}, // dtu center example
+  center: { lat: 55.786781, lng: 12.523153 }, // dtu example
   radiusMeters: 150,
-  capMinutes: 1, // 12 hours safety cap
+  capMinutes: 1,
 };
+
+type Workplace = typeof WORKPLACE & { workplaceId?: string; active?: boolean; tasks?: string[]; updatedAtMs?: number };
 
 type SessionState = "IDLE" | "RUNNING" | "PAUSED_OUTSIDE" | "STOPPED";
 
 type Session = {
   startedAtMs: number | null;
   state: SessionState;
-  workedMs: number; // accumulated active time
-  lastResumedAtMs: number | null; // when we last entered RUNNING
+  workedMs: number;
+  lastResumedAtMs: number | null;
   capReached: boolean;
 };
-type EventType =
-  | "START"
-  | "PAUSE_OUTSIDE"
-  | "RESUME_INSIDE"
-  | "STOP_USER"
-  | "STOP_CAP";
+
+type EventType = "START" | "PAUSE_OUTSIDE" | "RESUME_INSIDE" | "STOP_USER" | "STOP_CAP";
 
 type WorkEvent = {
-  eventId: string;        // UUID
+  eventId: string;
   type: EventType;
-  atMs: number;           // Date.now()
-  employeeId?: string;    // add later from Cognito
-  locationId?: string;    // add later from AWS config
-  sessionId: string;      // stable per session
+  atMs: number;
+  employeeId?: string;
+  locationId?: string;
+  sessionId: string;
   payload?: Record<string, unknown>;
 };
 
-
 function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
-  const R = 6371000; // meters
+  const R = 6371000;
   const toRad = (x: number) => (x * Math.PI) / 180;
 
   const dLat = toRad(b.lat - a.lat);
@@ -56,10 +50,7 @@ function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng:
   const sinDLat = Math.sin(dLat / 2);
   const sinDLng = Math.sin(dLng / 2);
 
-  const h =
-    sinDLat * sinDLat +
-    Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng;
-
+  const h = sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng;
   const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
   return R * c;
 }
@@ -73,11 +64,13 @@ function formatMs(ms: number) {
 }
 
 export default function HomeScreen() {
-  const [workplace, setWorkplace] = useState(WORKPLACE);
+  const [workplace, setWorkplace] = useState<Workplace>(WORKPLACE);
 
-  const [permissionStatus, setPermissionStatus] = useState<Location.PermissionStatus | "unknown">(
-    "unknown"
-  );
+  // NEW: keep the full list (so user can choose)
+  const [awsWorkplaces, setAwsWorkplaces] = useState<Workplace[]>([]);
+  const [awsNames, setAwsNames] = useState<string>("");
+
+  const [permissionStatus, setPermissionStatus] = useState<Location.PermissionStatus | "unknown">("unknown");
   const capLoggedRef = useRef(false);
 
   const [currentCoords, setCurrentCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -91,11 +84,12 @@ export default function HomeScreen() {
     capReached: false,
   });
 
-  // Timer tick for UI and cap enforcement (runs only while RUNNING)
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  
+
+  // Use selected workplace cap
   const capMs = useMemo(() => workplace.capMinutes * 60 * 1000, [workplace.capMinutes]);
 
+  // Use selected workplace center/radius
   const distanceInfo = useMemo(() => {
     if (!currentCoords) return null;
     const d = haversineMeters(currentCoords, workplace.center);
@@ -103,7 +97,7 @@ export default function HomeScreen() {
       meters: d,
       inside: d <= workplace.radiusMeters,
     };
-  }, [currentCoords]);
+  }, [currentCoords, workplace.center, workplace.radiusMeters]);
 
   const effectiveWorkedMs = useMemo(() => {
     if (session.state !== "RUNNING" || session.lastResumedAtMs === null) return session.workedMs;
@@ -111,16 +105,9 @@ export default function HomeScreen() {
     return session.workedMs + (now - session.lastResumedAtMs);
   }, [session]);
 
-  const [sessionId, setSessionId] = useState<string>(() =>
-  (globalThis.crypto?.randomUUID?.() ?? `sess_${Date.now()}`)
-  );
+  const [sessionId, setSessionId] = useState<string>(() => globalThis.crypto?.randomUUID?.() ?? `sess_${Date.now()}`);
   const [events, setEvents] = useState<WorkEvent[]>([]);
   const activeSessionIdRef = useRef(sessionId);
-
-  const [awsNames, setAwsNames] = useState<string>("");
-  
-
-
 
   function stopTick() {
     if (tickRef.current) {
@@ -130,31 +117,28 @@ export default function HomeScreen() {
   }
 
   function newId(prefix: string) {
-  return globalThis.crypto?.randomUUID?.() ?? `${prefix}_${Date.now()}_${Math.random()}`;
-}
+    return globalThis.crypto?.randomUUID?.() ?? `${prefix}_${Date.now()}_${Math.random()}`;
+  }
 
-  function pushEvent(type: EventType, payload?: Record<string, unknown>,overrideSessionId?: string) {
-  const event: WorkEvent = {
-    eventId: newId("evt"),
-    type,
-    atMs: Date.now(),
-    sessionId: overrideSessionId ?? sessionId,
-    payload,
-  };
-  setEvents((prev) => [...prev, event]);
-}
-
+  function pushEvent(type: EventType, payload?: Record<string, unknown>, overrideSessionId?: string) {
+    const event: WorkEvent = {
+      eventId: newId("evt"),
+      type,
+      atMs: Date.now(),
+      sessionId: overrideSessionId ?? sessionId,
+      payload,
+    };
+    setEvents((prev) => [...prev, event]);
+  }
 
   function startTick() {
     stopTick();
     tickRef.current = setInterval(() => {
-      // Cap enforcement: if running too long, force stop
       setSession((prev) => {
         if (prev.state !== "RUNNING" || prev.lastResumedAtMs === null) return prev;
         const now = Date.now();
         const worked = prev.workedMs + (now - prev.lastResumedAtMs);
         if (worked >= capMs) {
-          // Force stop at cap
           return {
             ...prev,
             state: "STOPPED",
@@ -163,32 +147,29 @@ export default function HomeScreen() {
             capReached: true,
           };
         }
-        return prev; // keep running
+        return prev;
       });
     }, 1000);
   }
 
   useEffect(() => {
-    // start/stop timer ticking based on session state
     if (session.state === "RUNNING") startTick();
     else stopTick();
-
     return () => stopTick();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.state]);
 
   useEffect(() => {
-  activeSessionIdRef.current = sessionId;
-}, [sessionId]);
+    activeSessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
-  if (session.capReached && !capLoggedRef.current) {
-    capLoggedRef.current = true;
-    pushEvent("STOP_CAP", undefined, activeSessionIdRef.current);
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [session.capReached]);
-
+    if (session.capReached && !capLoggedRef.current) {
+      capLoggedRef.current = true;
+      pushEvent("STOP_CAP", undefined, activeSessionIdRef.current);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.capReached]);
 
   async function requestPermission() {
     const { status } = await Location.requestForegroundPermissionsAsync();
@@ -222,25 +203,27 @@ export default function HomeScreen() {
     if (!distanceInfo.inside) {
       Alert.alert(
         "Not on-site",
-        `You must be inside the workplace circle to start.\nDistance: ${distanceInfo.meters.toFixed(
-          1
-        )}m (radius ${WORKPLACE.radiusMeters}m)`
+        `You must be inside the workplace circle to start.\nDistance: ${distanceInfo.meters.toFixed(1)}m (radius ${
+          workplace.radiusMeters
+        }m)`
       );
       return;
     }
-    const sid = newId("sess");
 
+    const sid = newId("sess");
     setSessionId(sid);
     capLoggedRef.current = false;
 
     pushEvent(
-  "START",
-  {
-    distanceMeters: distanceInfo.meters,
-    radiusMeters: WORKPLACE.radiusMeters,
-  },
-  sid
-);
+      "START",
+      {
+        distanceMeters: distanceInfo.meters,
+        radiusMeters: workplace.radiusMeters,
+        workplaceName: workplace.name,
+        workplaceId: (workplace as any).workplaceId,
+      },
+      sid
+    );
 
     setSession({
       startedAtMs: Date.now(),
@@ -252,27 +235,25 @@ export default function HomeScreen() {
   }
 
   function stopSessionUser() {
-  if (session.state === "IDLE") return; // nothing to stop
+    if (session.state === "IDLE") return;
 
-  pushEvent("STOP_USER", undefined, activeSessionIdRef.current);
+    pushEvent("STOP_USER", undefined, activeSessionIdRef.current);
 
-  setSession((prev) => {
-    if (prev.state === "RUNNING" && prev.lastResumedAtMs !== null) {
-      const now = Date.now();
-      const worked = prev.workedMs + (now - prev.lastResumedAtMs);
-      return {
-        ...prev,
-        state: "STOPPED",
-        workedMs: Math.min(worked, capMs),
-        lastResumedAtMs: null,
-      };
-    }
-    return { ...prev, state: "STOPPED", lastResumedAtMs: null };
-  });
-}
+    setSession((prev) => {
+      if (prev.state === "RUNNING" && prev.lastResumedAtMs !== null) {
+        const now = Date.now();
+        const worked = prev.workedMs + (now - prev.lastResumedAtMs);
+        return {
+          ...prev,
+          state: "STOPPED",
+          workedMs: Math.min(worked, capMs),
+          lastResumedAtMs: null,
+        };
+      }
+      return { ...prev, state: "STOPPED", lastResumedAtMs: null };
+    });
+  }
 
-
-  // Simulate geofence EXIT (pause)
   function simulateExit() {
     if (session.state !== "RUNNING" || session.lastResumedAtMs === null) return;
 
@@ -280,7 +261,6 @@ export default function HomeScreen() {
 
     setSession((prev) => {
       if (prev.state !== "RUNNING" || prev.lastResumedAtMs === null) return prev;
-      
       const now = Date.now();
       const worked = prev.workedMs + (now - prev.lastResumedAtMs);
       return {
@@ -292,15 +272,14 @@ export default function HomeScreen() {
     });
   }
 
-  // Simulate geofence ENTER (resume)
   function simulateEnter() {
     if (session.state !== "PAUSED_OUTSIDE") return;
 
     pushEvent("RESUME_INSIDE");
-    
+
     setSession((prev) => {
       if (prev.state !== "PAUSED_OUTSIDE") return prev;
-      
+
       if (prev.workedMs >= capMs) {
         return { ...prev, state: "STOPPED", capReached: true };
       }
@@ -312,73 +291,89 @@ export default function HomeScreen() {
     });
   }
 
-  // Reset everything
   function reset() {
-  const sid = newId("sess");
-  setSessionId(sid);
-  capLoggedRef.current = false;
+    const sid = newId("sess");
+    setSessionId(sid);
+    capLoggedRef.current = false;
 
-  setSession({
-    startedAtMs: null,
-    state: "IDLE",
-    workedMs: 0,
-    lastResumedAtMs: null,
-    capReached: false,
-  });
+    setSession({
+      startedAtMs: null,
+      state: "IDLE",
+      workedMs: 0,
+      lastResumedAtMs: null,
+      capReached: false,
+    });
 
-  setEvents([]); // keep clean per run while developing
-  setCurrentCoords(null);
-  setAccuracy(null);
-}
-async function whoAmI() {
-  try {
-    const u = await getCurrentUser();
-    console.log("CURRENT USER:", u);
-    Alert.alert("Current user", u.username);
-  } catch {
-    Alert.alert("Current user", "Not signed in");
+    setEvents([]);
+    setCurrentCoords(null);
+    setAccuracy(null);
   }
-}
 
-async function logout() {
-  await signOut();
-  Alert.alert("Signed out", "You are now signed out");
-  router.replace("/sign-in");
-}
-
-async function loadWorkplacesFromAws() {
-  try {
-    const items = await getWorkplaces();
-    setAwsNames(items.map((w) => w.name).join(", "));
-
-    if (items.length > 0) {
-      setWorkplace(items[0]); // for now, just pick first workplace
+  async function whoAmI() {
+    try {
+      const u = await getCurrentUser();
+      console.log("CURRENT USER:", u);
+      Alert.alert("Current user", u.username);
+    } catch {
+      Alert.alert("Current user", "Not signed in");
     }
-
-    Alert.alert("AWS OK", `Loaded ${items.length} workplace(s)`);
-  } catch (e: any) {
-    Alert.alert("AWS Load failed", e?.message ?? "Unknown error");
   }
-}
 
+  async function logout() {
+    await signOut();
+    Alert.alert("Signed out", "You are now signed out");
+    router.replace("/sign-in");
+  }
 
+  async function loadWorkplacesFromAws() {
+    try {
+      const items = await getMyWorkplaces();
 
+      setAwsWorkplaces(items);
+      setAwsNames(items.map((w) => w.name).join(", "));
 
+      // pick first by default
+      if (items.length > 0) {
+        setWorkplace(items[0]);
+      }
 
+      Alert.alert("AWS OK", `Loaded ${items.length} workplace(s)`);
+    } catch (e: any) {
+      Alert.alert("AWS Load failed", e?.message ?? "Unknown error");
+    }
+  }
 
+  // NEW (optional): auto-load on screen open
+  // useEffect(() => {
+  //   loadWorkplacesFromAws();
+  // }, []);
 
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.h1}>WorkTracker v0</Text>
+      <Text style={styles.small}>Active workplace: {workplace.name}</Text>
 
       <View style={styles.card}>
         <Text style={styles.h2}>Workplace</Text>
-        <Text>Name: {WORKPLACE.name}</Text>
+        <Text>Name: {workplace.name}</Text>
         <Text>
-          Center: {WORKPLACE.center.lat}, {WORKPLACE.center.lng}
+          Center: {workplace.center.lat}, {workplace.center.lng}
         </Text>
-        <Text>Radius: {WORKPLACE.radiusMeters}m</Text>
-        <Text>Session cap: {WORKPLACE.capMinutes} minute(s)</Text>
+        <Text>Radius: {workplace.radiusMeters}m</Text>
+        <Text>Session cap: {workplace.capMinutes} minute(s)</Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.h2}>AWS workplaces</Text>
+        <Button title="Load workplaces from AWS" onPress={loadWorkplacesFromAws} />
+        <Text style={styles.small}>Loaded: {awsNames || "(none loaded)"}</Text>
+
+        {/* NEW: allow the employee to choose which workplace is active */}
+        {awsWorkplaces.map((w) => (
+          <View key={(w as any).workplaceId ?? w.name} style={{ marginTop: 8 }}>
+            <Button title={`Use: ${w.name}`} onPress={() => setWorkplace(w)} />
+          </View>
+        ))}
       </View>
 
       <View style={styles.card}>
@@ -424,11 +419,8 @@ async function loadWorkplacesFromAws() {
         <View style={styles.row}>
           <Button title="Reset" onPress={reset} />
           <Button title="Who am I?" onPress={whoAmI} />
-          <Button title="Load workplaces from AWS" onPress={loadWorkplacesFromAws} />
           <Button title="Logout" onPress={logout} />
         </View>
-
-        <Text style={styles.small}>AWS workplaces: {awsNames || "(none loaded)"}</Text>
 
         <Text style={styles.small}>
           Note: EXIT/ENTER are simulated because we don’t have a physical device setup yet. Later,
@@ -437,7 +429,6 @@ async function loadWorkplacesFromAws() {
       </View>
     </ScrollView>
   );
-
 }
 
 const styles = StyleSheet.create({
@@ -445,20 +436,18 @@ const styles = StyleSheet.create({
   h1: { fontSize: 22, fontWeight: "700" },
   h2: { fontSize: 16, fontWeight: "700", marginBottom: 6 },
   card: {
-  padding: 12,
-  borderWidth: 1,
-  borderRadius: 10,
-  gap: 8,
-  borderColor: "#ddd",
-  backgroundColor: "#fafafa",
-},
-
+    padding: 12,
+    borderWidth: 1,
+    borderRadius: 10,
+    gap: 8,
+    borderColor: "#ddd",
+    backgroundColor: "#fafafa",
+  },
   row: {
-  flexDirection: "row",
-  flexWrap: "wrap",
-  gap: 10,
-  justifyContent: "space-between",
-},
-
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    justifyContent: "space-between",
+  },
   small: { opacity: 0.8, marginTop: 4 },
 });
